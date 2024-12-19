@@ -1,0 +1,23 @@
+# .github/workflows/trigger-gitlab-ci.yml
+name: Trigger GitLab CI
+
+on:
+  pull_request:
+    branches:
+      - main
+      - development
+      - staging
+
+jobs:
+  trigger-gitlab-ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: trigger Job
+        uses: appleboy/gitlab-ci-action@v1.3.0
+        with:
+          token: ${{ secrets.GITLAB_PAT }}
+          debug: true
+          project_id: ${{ secrets.GITLAB_PROJECT_ID }}
+          ref: ${{ github.head_ref }}
+          variables: pr_num=${{ github.event.pull_request.number }}
+  

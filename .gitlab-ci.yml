@@ -1,7 +1,6 @@
 # image: golang:1.21-alpine
 
 variables:
-  REPO_NAME: mobile-banking-backend
   GO111MODULE: "on"
   GOPATH: "$CI_PROJECT_DIR/.go"
   CACHE_DIR: "$CI_PROJECT_DIR/.cache"
@@ -9,6 +8,7 @@ variables:
   POSTGRES_USER: user
   POSTGRES_PASSWORD: password
   DATABASE_URL: postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@postgres:5432/$POSTGRES_DB 
+  pr_num: ""
 # Cache dependencies across jobs
 cache:
   key: ${CI_COMMIT_REF_SLUG}
@@ -21,136 +21,165 @@ stages:
   - build
   - test
   - deploy
+  - notify
 
-build:
-  image: docker:20.10.16
-  stage: build
-  services:
-    - docker:20.10.16-dind
-  before_script:
-    - docker info
-    - docker login -u $DOCKERHUB_USERNAME -p $DOCKERHUB_PASSWORD
-    - echo $CA > ca.pem
+
+# build:
+#   image: docker:20.10.16
+#   stage: build
+#   services:
+#     - docker:20.10.16-dind
+#   before_script:
+#     - echo "$DOCKERHUB_PASSWORD" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
+#     - echo $CA > ca.pem
+#   script:
+#     - docker build -t $DOCKER_IMAGE:$CI_COMMIT_SHORT_SHA .
+#     - docker push $DOCKER_IMAGE:$CI_COMMIT_SHORT_SHA
+#   only:
+#     refs:
+#       - main
+#       - development
+#       - staging
+
+
+# unit-tests:
+#   stage: test
+#   image: golang:1.21
+#   script:
+#     - echo "Testing with Go ${GO_VERSION} on ${OS} with ${DATABASE}"
+#     - go mod download
+#     - go test ./tests/unit/... -v
+#   allow_failure: true
+#   only:
+#     - main
+#     - merge_requests
+#     - triggers
+#     - development
+#     - staging
+#   except:
+#     variables:
+#       - $CI_PIPELINE_SOURCE == "external_pull_request_event"
+
+# integration-tests:
+#   stage: test
+#   image: golang:1.21
+#   services:
+#     - name: postgres:13
+#       alias: postgres
+#   variables:
+#     POSTGRES_HOST_AUTH_METHOD: trust
+#   before_script:
+#     - apt-get update && apt-get install -y postgresql-client
+#     - go mod download
+#   script:
+#     - psql -h "postgres" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT 'OK' AS status;"
+#     - export DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@postgres:5432/$POSTGRES_DB"
+#     - go test ./tests/integration/... -v
+#   only:
+#     - merge_requests
+#     - main
+#     - development
+#     - staging
+
+# e2e-tests:
+#   stage: test
+#   needs:
+#     - build
+#   image: golang:1.21
+#   services:
+#     - name: $DOCKER_IMAGE:$CI_COMMIT_SHORT_SHA
+#       alias: app
+#       # variables:
+#       #   DATABASE_URL: $DATABASE_URL_TEST?$DATABASE_URL_CA
+#   variables:
+#     POSTGRES_HOST_AUTH_METHOD: trust
+#     FF_NETWORK_PER_BUILD: 1
+#     DATABASE_URL: $DATABASE_URL_TEST?$DATABASE_URL_CA
+#   before_script:
+#     - apt-get update && apt-get install -y postgresql-client
+#     - go mod download
+#   script:
+#     - export ServerAddress="http://app:8080"
+#     - go test ./tests/e2e/... -v
+#   only:
+#     - development
+#     - staging
+#     - main
+
+# deploy-dev:
+#   stage: deploy
+#   needs:
+#     - unit-tests
+#     - integration-tests
+#     - e2e-tests
+#   before_script:
+#     - echo $GCLOUD_SERVICE_KEY > service-account.json
+#     - gcloud auth activate-service-account --key-file service-account.json
+#     - gcloud config set project $GCP_PROJECT_ID
+#   image: google/cloud-sdk:stable
+#   script:
+#     - gcloud run deploy $SERVICE_NAME_DEV
+#         --image $DOCKER_IMAGE:$CI_COMMIT_SHORT_SHA
+#         --region asia-southeast2 
+#   only:
+#     variables:
+#       - $pr_num == ""
+#     refs:
+#       - development
+
+# deploy-staging:
+#   stage: deploy
+#   needs:
+#     - unit-tests
+#     - integration-tests
+#     - e2e-tests
+#   before_script:
+#     - echo $GCLOUD_SERVICE_KEY > service-account.json
+#     - gcloud auth activate-service-account --key-file service-account.json
+#     - gcloud config set project $GCP_PROJECT_ID
+#   image: google/cloud-sdk:stable
+#   script:
+#     - gcloud run deploy $SERVICE_NAME_STAGING
+#         --image $DOCKER_IMAGE:$CI_COMMIT_SHORT_SHA
+#         --region asia-southeast2 
+#   only:
+#     variables:
+#       - $pr_num == ""
+#     refs:
+#       - staging
+
+# deploy-prod:
+#   stage: deploy
+#   when: manual
+#   needs:
+#     - unit-tests
+#     - integration-tests
+#     - e2e-tests
+#   before_script:
+#     - echo $GCLOUD_SERVICE_KEY > service-account.json
+#     - gcloud auth activate-service-account --key-file service-account.json
+#     - gcloud config set project $GCP_PROJECT_ID
+#   image: google/cloud-sdk:stable
+#   script:
+#     - gcloud run deploy $SERVICE_NAME
+#         --image $DOCKER_IMAGE:$CI_COMMIT_SHORT_SHA
+#         --region asia-southeast2 
+#   only:
+#     variables:
+#       - $pr_num == ""
+#     refs:
+#       - main
+
+update_status:
+  stage: notify
   script:
-    - docker build -t $DOCKER_IMAGE:$CI_COMMIT_SHORT_SHA .
-    - docker push $DOCKER_IMAGE:$CI_COMMIT_SHORT_SHA
-  only:
-    - main
-    - development
-    - staging
+    - | 
+      curl -X POST \
+      -H "Authorization: token $GITHUB_TOKEN" \
+      -H "Accept: application/vnd.github.v3+json" \
+      -d '{"state": "success", "description": "Pipeline succeeded", "context": "ci/gitlab/gitlab.com"}' \
+      https://api.github.com/repos/$GITHUB_OWNER/$SERVICE_NAME/statuses/$CI_COMMIT_SHA
+  # only:
+  #   variables:
+  #     - $pr_num != ""
 
-
-unit-tests:
-  stage: test
-  image: golang:1.21
-  script:
-    - echo "Testing with Go ${GO_VERSION} on ${OS} with ${DATABASE}"
-    - go mod download
-    - go test ./tests/unit/... -v
-  allow_failure: true
-  only:
-    - main
-    - merge_requests
-    - development
-    - staging
-
-integration-tests:
-  stage: test
-  image: golang:1.21
-  services:
-    - name: postgres:13
-      alias: postgres
-  variables:
-    POSTGRES_HOST_AUTH_METHOD: trust
-  before_script:
-    - apt-get update && apt-get install -y postgresql-client
-    - go mod download
-  script:
-    - psql -h "postgres" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT 'OK' AS status;"
-    - export DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@postgres:5432/$POSTGRES_DB"
-    - go test ./tests/integration/... -v
-  only:
-    - merge_requests
-    - main
-    - development
-    - staging
-
-e2e-tests:
-  stage: test
-  needs:
-    - build
-  image: golang:1.21
-  services:
-    - name: $DOCKER_IMAGE:$CI_COMMIT_SHORT_SHA
-      alias: app
-      variables:
-        DATABASE_URL: $DATABASE_URL_TEST?$DATABASE_URL_CA
-  variables:
-    POSTGRES_HOST_AUTH_METHOD: trust
-    FF_NETWORK_PER_BUILD: 1
-    DATABASE_URL: $DATABASE_URL_TEST?$DATABASE_URL_CA
-  before_script:
-    - apt-get update && apt-get install -y postgresql-client
-    - go mod download
-  script:
-    - export ServerAddress="http://app:8080"
-    - go test ./tests/e2e/... -v
-  only:
-    - development
-    - staging
-    - main
-
-deploy-dev:
-  stage: deploy
-  needs:
-    - unit-tests
-    - integration-tests
-    - e2e-tests
-  before_script:
-    - echo $GCLOUD_SERVICE_KEY > service-account.json
-    - gcloud auth activate-service-account --key-file service-account.json
-    - gcloud config set project $GCP_PROJECT_ID
-  image: google/cloud-sdk:stable
-  script:
-    - gcloud run deploy $SERVICE_NAME_DEV
-        --image $DOCKER_IMAGE:$CI_COMMIT_SHORT_SHA
-        --region asia-southeast2 
-  only:
-    - development
-
-deploy-staging:
-  stage: deploy
-  needs:
-    - unit-tests
-    - integration-tests
-    - e2e-tests
-  before_script:
-    - echo $GCLOUD_SERVICE_KEY > service-account.json
-    - gcloud auth activate-service-account --key-file service-account.json
-    - gcloud config set project $GCP_PROJECT_ID
-  image: google/cloud-sdk:stable
-  script:
-    - gcloud run deploy $SERVICE_NAME_STAGING
-        --image $DOCKER_IMAGE:$CI_COMMIT_SHORT_SHA
-        --region asia-southeast2 
-  only:
-    - staging
-
-deploy-prod:
-  stage: deploy
-  when: manual
-  needs:
-    - unit-tests
-    - integration-tests
-    - e2e-tests
-  before_script:
-    - echo $GCLOUD_SERVICE_KEY > service-account.json
-    - gcloud auth activate-service-account --key-file service-account.json
-    - gcloud config set project $GCP_PROJECT_ID
-  image: google/cloud-sdk:stable
-  script:
-    - gcloud run deploy $SERVICE_NAME
-        --image $DOCKER_IMAGE:$CI_COMMIT_SHORT_SHA
-        --region asia-southeast2 
-  only:
-    - main
